@@ -13,11 +13,20 @@ from pathlib import Path
 import base64
 import json
 import os
-from dotenv import load_dotenv
 import anthropic
 
-# Cargar variables de entorno
-load_dotenv()
+# Cargar .env manualmente (funciona en local; en Streamlit Cloud usa st.secrets)
+def _cargar_env_local():
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, value = line.partition("=")
+                    os.environ.setdefault(key.strip(), value.strip())
+
+_cargar_env_local()
 
 # Configuración de la página
 st.set_page_config(
@@ -108,11 +117,13 @@ def extraer_datos_con_vision_api(archivo_contenido: bytes, nombre_archivo: str,
         Diccionario con los datos extraídos
     """
     
-    # Obtener API key
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    
+    # Obtener API key: primero intenta st.secrets (Streamlit Cloud), luego variable de entorno (local)
+    api_key = st.secrets.get("ANTHROPIC_API_KEY", None) if hasattr(st, "secrets") else None
     if not api_key:
-        st.error("⚠️ API Key no configurada. Por favor, configura ANTHROPIC_API_KEY en el archivo .env")
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+
+    if not api_key:
+        st.error("⚠️ API Key no configurada. Configura ANTHROPIC_API_KEY en Secrets (Streamlit Cloud) o en el archivo .env (local)")
         return {
             "emisor": "",
             "monto": "0",
@@ -397,9 +408,11 @@ def main():
     un formato compatible con Google Sheets según reglas de negocio específicas.
     """)
     
-    # Verificar API Key
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    
+    # Verificar API Key (Streamlit Cloud usa st.secrets, local usa .env)
+    api_key = st.secrets.get("ANTHROPIC_API_KEY", None) if hasattr(st, "secrets") else None
+    if not api_key:
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+
     # Sidebar con información
     with st.sidebar:
         st.header("ℹ️ Información")
