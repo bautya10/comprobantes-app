@@ -577,8 +577,8 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: gray; font-size: 0.9em;'>
-        💡 Powered by Anthropic Claude 3.5 Sonnet | 
-        Desarrollado con Streamlit
+        💡 Hecho por y para SIDERA | 2026
+        Siempre priorizando la eficiencia
     </div>
     """, unsafe_allow_html=True)
 
