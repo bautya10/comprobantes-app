@@ -103,6 +103,19 @@ def limpiar_monto(monto_str: str) -> str:
     return monto.strip()
 
 
+def pdf_a_imagen_png(pdf_bytes: bytes) -> bytes:
+    """
+    Convierte la primera página de un PDF a PNG en memoria.
+    La API de Anthropic solo acepta imágenes (jpeg/png/gif/webp), no PDFs directamente.
+    """
+    import fitz  # pymupdf
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pagina = doc[0]
+    mat = fitz.Matrix(2.0, 2.0)  # 2x resolución para mejor calidad OCR
+    pix = pagina.get_pixmap(matrix=mat)
+    return pix.tobytes("png")
+
+
 def extraer_datos_con_vision_api(archivo_contenido: bytes, nombre_archivo: str, 
                                   tipo_archivo: str) -> Dict[str, str]:
     """
@@ -136,20 +149,27 @@ def extraer_datos_con_vision_api(archivo_contenido: bytes, nombre_archivo: str,
     try:
         # Inicializar cliente de Anthropic
         client = anthropic.Anthropic(api_key=api_key)
-        
-        # Codificar archivo en base64
-        base64_data = base64.b64encode(archivo_contenido).decode('utf-8')
-        
-        # Determinar media_type
-        if tipo_archivo in ['image/jpeg', 'image/jpg']:
+
+        # Si es PDF, convertir primera página a PNG
+        # (Anthropic API solo acepta: image/jpeg, image/png, image/gif, image/webp)
+        if tipo_archivo == 'application/pdf' or nombre_archivo.lower().endswith('.pdf'):
+            try:
+                archivo_contenido = pdf_a_imagen_png(archivo_contenido)
+                media_type = 'image/png'
+            except Exception as e:
+                st.error(f"❌ No se pudo convertir el PDF '{nombre_archivo}': {e}")
+                return {"emisor": "", "monto": "0", "destinatario": "",
+                        "id_operacion": "", "fecha": "", "horario": ""}
+        elif tipo_archivo in ['image/jpeg', 'image/jpg']:
             media_type = 'image/jpeg'
         elif tipo_archivo == 'image/png':
             media_type = 'image/png'
-        elif tipo_archivo == 'application/pdf':
-            media_type = 'application/pdf'
         else:
             media_type = 'image/jpeg'
-        
+
+        # Codificar en base64 (después de la posible conversión)
+        base64_data = base64.b64encode(archivo_contenido).decode('utf-8')
+
         # Mostrar indicador de progreso
         with st.spinner(f'🤖 Procesando {nombre_archivo} con Claude Vision...'):
             # Llamar a la API
@@ -577,8 +597,8 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: gray; font-size: 0.9em;'>
-        💡 Hecho por y para SIDERA | 2026
-        Siempre priorizando la eficiencia
+        💡 Powered by Anthropic Claude 3.5 Sonnet | 
+        Desarrollado con Streamlit
     </div>
     """, unsafe_allow_html=True)
 
