@@ -426,6 +426,7 @@ def main():
     st.markdown("""
     Esta aplicación procesa comprobantes bancarios (imágenes, PDFs, ZIPs) y genera 
     un formato compatible con Google Sheets según reglas de negocio específicas.
+    Solo aplica para NEXO!
     """)
     
     # Verificar API Key (Streamlit Cloud usa st.secrets, local usa .env)
@@ -458,13 +459,13 @@ def main():
         - Archivos: ZIP
         
         **Reglas de formateo:**
-        - Si destinatario = "Jessica Andrea Giuliani"
+        - Si destinatario = "Jessica Andrea Giuliani o Credibank"
           → `"EMISOR",,,,,,,,MONTO`
         - Si destinatario = Otro
           → `MONTO`
         
         **Modelo:**
-        - Claude 3.5 Sonnet
+        - Claude 3.5 SonX
         """)
     
     # Área principal
@@ -597,8 +598,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: gray; font-size: 0.9em;'>
-        💡 Powered by Anthropic Claude 3.5 Sonnet | 
-        Desarrollado con Streamlit
+        💡 Desarrollado por y para SIDERA | 2026 Priorizando la eficiencia
     </div>
     """, unsafe_allow_html=True)
 
