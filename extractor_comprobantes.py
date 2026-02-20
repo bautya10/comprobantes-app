@@ -107,11 +107,13 @@ def pdf_a_imagen_png(pdf_bytes: bytes) -> bytes:
     """
     Convierte la primera página de un PDF a PNG en memoria.
     La API de Anthropic solo acepta imágenes (jpeg/png/gif/webp), no PDFs directamente.
+    Usa alta resolución (3x) para mejor OCR de textos pequeños.
     """
     import fitz  # pymupdf
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pagina = doc[0]
-    mat = fitz.Matrix(2.0, 2.0)  # 2x resolución para mejor calidad OCR
+    # 3x resolución para mejor calidad OCR (especialmente en PDFs de bancos con texto pequeño)
+    mat = fitz.Matrix(3.0, 3.0)
     pix = pagina.get_pixmap(matrix=mat)
     return pix.tobytes("png")
 
@@ -171,10 +173,10 @@ def extraer_datos_con_vision_api(archivo_contenido: bytes, nombre_archivo: str,
         base64_data = base64.b64encode(archivo_contenido).decode('utf-8')
 
         # Mostrar indicador de progreso
-        with st.spinner(f'🤖 Procesando {nombre_archivo} con Claude Vision...'):
-            # Llamar a la API
+        with st.spinner(f'🤖 Procesando {nombre_archivo} con Claude 4.6...'):
+            # Llamar a la API con Sonnet 4.6 (más rápido, mejor y más barato que Sonnet 4)
             message = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-4-6-20250620",
                 max_tokens=1024,
                 messages=[{
                     "role": "user",
@@ -191,23 +193,34 @@ def extraer_datos_con_vision_api(archivo_contenido: bytes, nombre_archivo: str,
                             "type": "text",
                             "text": '''Analiza este comprobante bancario y extrae EXACTAMENTE estos campos:
 
-- emisor: Nombre completo de quien envía el dinero
-- monto: Cantidad transferida (número con su formato original, incluyendo símbolos si los tiene)
-- destinatario: Nombre completo de quien recibe
-- id_operacion: Número o código único de la operación/transacción
+**IMPORTANTE - Reglas especiales para el EMISOR:**
+- El EMISOR es quien ENVÍA el dinero (quien hace la transferencia)
+- En Personal Pay: busca "De:" o el nombre al inicio del comprobante
+- En Ualá: busca "De" o "Enviaste desde" o el nombre del usuario que envía
+- En Mercado Pago: busca "Enviaste dinero a" o el remitente
+- Si hay un alias o CVU pero también un nombre, usa el NOMBRE, no el alias
+- Si solo aparece un alias/CVU sin nombre, usa el alias
+- NO confundas emisor con destinatario (quien recibe)
+
+**Campos a extraer:**
+- emisor: Nombre completo de quien ENVÍA el dinero (ver reglas arriba)
+- monto: Cantidad transferida (número con formato, incluye $ si está visible)
+- destinatario: Nombre completo de quien RECIBE el dinero
+- id_operacion: Número o código único de la operación/transacción (puede estar como "Nro de operación", "ID", "Código", etc.)
 - fecha: Fecha de la operación en formato YYYY-MM-DD
-- horario: Hora de la operación en formato HH:MM:SS
+- horario: Hora de la operación en formato HH:MM:SS (si solo hay HH:MM, agrega :00 al final)
 
+**Formato de respuesta:**
 Responde ÚNICAMENTE con un objeto JSON válido con estas claves exactas.
-Si algún campo no está visible en el comprobante, usa una cadena vacía "".
-NO agregues texto explicativo antes o después, SOLO el JSON.
+Si algún campo no está visible, usa una cadena vacía "".
+NO agregues texto explicativo antes o después del JSON.
 
-Ejemplo de respuesta:
+Ejemplo de respuesta correcta:
 {
-    "emisor": "Juan Pérez",
+    "emisor": "Juan Carlos Pérez",
     "monto": "$1.500,00",
     "destinatario": "María González",
-    "id_operacion": "OP123456",
+    "id_operacion": "123456789",
     "fecha": "2024-02-11",
     "horario": "14:30:00"
 }'''
@@ -271,7 +284,7 @@ def aplicar_logica_formateo(datos: Dict[str, str]) -> Tuple[str, str, str]:
     Aplica la lógica de formateo según las reglas de negocio.
     
     Reglas:
-    - Si destinatario es "Jessica Andrea Giuliani":
+    - Si destinatario es "Jessica Andrea Giuliani" o "Credibank":
       Formato: "NOMBRE_EMISOR",,,,,,,,MONTO (8 comas para columna K)
     - Si destinatario es otro o no figura:
       Formato: MONTO
@@ -426,7 +439,7 @@ def main():
     st.markdown("""
     Esta aplicación procesa comprobantes bancarios (imágenes, PDFs, ZIPs) y genera 
     un formato compatible con Google Sheets según reglas de negocio específicas.
-    Solo aplica para NEXO!
+    **Solo aplica para NEXO!**
     """)
     
     # Verificar API Key (Streamlit Cloud usa st.secrets, local usa .env)
@@ -459,13 +472,19 @@ def main():
         - Archivos: ZIP
         
         **Reglas de formateo:**
-        - Si destinatario = "Jessica Andrea Giuliani o Credibank"
+        - Si destinatario = "Jessica Andrea Giuliani" o "Credibank"
           → `"EMISOR",,,,,,,,MONTO`
         - Si destinatario = Otro
           → `MONTO`
         
         **Modelo:**
-        - Claude 4
+        - Claude Sonnet 4.6 (más rápido y preciso)
+        
+        **Bancos soportados:**
+        - Personal Pay ✅
+        - Ualá ✅
+        - Mercado Pago ✅
+        - Todos los demás ✅
         """)
     
     # Área principal
