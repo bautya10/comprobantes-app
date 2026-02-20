@@ -176,7 +176,7 @@ def extraer_datos_con_vision_api(archivo_contenido: bytes, nombre_archivo: str,
         with st.spinner(f'🤖 Procesando {nombre_archivo} con Claude 4.6...'):
             # Llamar a la API con Sonnet 4.6 (más rápido, mejor y más barato que Sonnet 4)
             message = client.messages.create(
-                model="claude-sonnet-4-6-20250620",
+                model="claude-sonnet-4-6",
                 max_tokens=1024,
                 messages=[{
                     "role": "user",
