@@ -465,7 +465,7 @@ def main():
           → `MONTO`
         
         **Modelo:**
-        - Claude 3.5 SonX
+        - Claude 4
         """)
     
     # Área principal
