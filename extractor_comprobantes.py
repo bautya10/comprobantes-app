@@ -28,7 +28,7 @@ def _cargar_env_local():
 
 _cargar_env_local()
 
-st.set_page_config(page_title="Extractor Financiero SIDERA", page_icon="🏦", layout="wide")
+st.set_page_config(page_title="SIDERA - Controlador", page_icon="🏦", layout="wide")
 
 # =============================================================================
 # FUNCIONES DE LIMPIEZA
@@ -61,43 +61,45 @@ def pdf_a_imagen_png(pdf_bytes: bytes) -> bytes:
     return doc[0].get_pixmap(matrix=mat).tobytes("png")
 
 # =============================================================================
-# LÓGICA DE DOBLE PARTIDA EXACTA
+# LÓGICA DE DOBLE PARTIDA EXACTA (Columna B Vacía)
 # =============================================================================
 def generar_asientos(emisor: str, monto: str, id_op: str, cuenta: str) -> Dict[str, str]:
     """
-    Genera los textos para pegar asumiendo que SIEMPRE se pega en la COLUMNA B.
+    Genera los textos asumiendo que SIEMPRE se pega en la COLUMNA B.
+    Al empezar con coma (,), la Columna B queda vacía para el chip manual.
     B(0), C(1), D(2), E(3), F(4), G(5), H(6), I(7), J(8), K(9), L(10)
     """
     if not emisor or emisor == "SIN_EMISOR":
         emisor = id_op if id_op else "FALTA_NOMBRE"
 
+    monto_limpio = "".join(monto.split()) # Asegurar que no haya espacios en el número
     asientos = {}
     
     if cuenta in ["Giardino", "Cta Cte"]:
         # Piden transferencia a Nexo
-        # Nexo (Pega en B): Col B "Envio de transferencia", Col L monto (Crédito) -> 10 comas
-        asientos["Nexo"] = f'"Envio de transferencia",,,,,,,,,,{monto}'
-        # Cuenta (Pega en B): Col B "Transferencia", Col I monto (Débito) -> 7 comas
-        asientos[cuenta] = f'"Transferencia",,,,,,,{monto}'
+        # Nexo: B(vacío), L(Monto) -> 10 comas
+        asientos["Nexo"] = f',,,,,,,,,,{"".join(monto_limpio)}'
+        # Cuenta: B(vacío), I(Monto) -> 7 comas
+        asientos[cuenta] = f',,,,,,,{"".join(monto_limpio)}'
         
     elif cuenta in ["Celso", "Canella", "Vertice"]:
         # Cargan plata en Nexo
-        # Nexo (Pega en B): Col B "Transferencia", Col C Nombre, Col K monto (Débito) -> 8 comas post-nombre
-        asientos["Nexo"] = f'"Transferencia","{emisor}",,,,,,,,{monto}'
-        # Cuenta (Pega en B): Col B "Transferencia", Col C Nombre, Col L monto (Crédito) -> 9 comas post-nombre
-        asientos[cuenta] = f'"Transferencia","{emisor}",,,,,,,,,{monto}'
+        # Nexo: B(vacío), C(Emisor), K(Monto) -> 1 coma, emisor, 8 comas, monto
+        asientos["Nexo"] = f',"{emisor}",,,,,,,,{monto_limpio}'
+        # Cuenta: B(vacío), C(Emisor), L(Monto) -> 1 coma, emisor, 9 comas, monto
+        asientos[cuenta] = f',"{emisor}",,,,,,,,,{monto_limpio}'
         
     elif cuenta == "Nexo Directo (Pega en Col C)":
-        # Formato original (pega en C). C(0)... K(8)
-        asientos["Nexo"] = f'"{emisor}",,,,,,,,{monto}'
+        # Formato original pegando en C. C(Emisor), K(Monto).
+        asientos["Nexo"] = f'"{emisor}",,,,,,,,{monto_limpio}'
         
     else:
-        asientos["Sin Asignar"] = f'{monto}'
+        asientos["Sin Asignar"] = f'{monto_limpio}'
         
     return asientos
 
 # =============================================================================
-# IA VISION
+# IA VISION (Motor Restaurado)
 # =============================================================================
 def extraer_datos_con_vision(archivo_contenido: bytes, nombre_archivo: str, tipo_archivo: str, api_key: str):
     client = anthropic.Anthropic(api_key=api_key)
@@ -118,19 +120,24 @@ def extraer_datos_con_vision(archivo_contenido: bytes, nombre_archivo: str, tipo
                     "role": "user",
                     "content": [
                         {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": base64_data}},
-                        {"type": "text", "text": '''Extrae EXACTAMENTE:
-- emisor: Nombre de quien ENVÍA (En Ualá usa EXCLUSIVAMENTE el "Id Op.").
+                        {"type": "text", "text": '''Analiza este comprobante bancario y extrae EXACTAMENTE estos campos:
+
+**IMPORTANTE - Reglas especiales:**
+- emisor: Nombre de quien ENVÍA. (En Ualá usa EXCLUSIVAMENTE el "Id Op.").
 - monto: Cantidad transferida.
 - destinatario: Nombre de quien RECIBE.
 - id_operacion: Código de la transacción.
+
 Responde ÚNICAMENTE con JSON válido.'''
                         }
                     ]
                 }]
             )
         
-        texto = message.content[0].text.strip().replace('```json', '').replace('```', '').strip()
+        texto = message.content[0].text.strip()
+        texto = texto.replace('```json', '').replace('```', '').strip()
         datos = json.loads(texto)
+        
         return {
             "archivo": nombre_archivo,
             "emisor": limpiar_nombre(datos.get("emisor", "")),
@@ -138,7 +145,8 @@ Responde ÚNICAMENTE con JSON válido.'''
             "id_operacion": datos.get("id_operacion", "")
         }
     except Exception as e:
-        return {"archivo": nombre_archivo, "emisor": "ERROR", "monto": "0", "id_operacion": "ERROR"}
+        st.error(f"Error procesando {nombre_archivo}: {str(e)}")
+        return {"archivo": nombre_archivo, "emisor": "ERROR_LECTURA", "monto": "0", "id_operacion": ""}
 
 def procesar_archivos_zip(archivos_subidos):
     procesados = []
@@ -159,143 +167,143 @@ def procesar_archivos_zip(archivos_subidos):
 # INTERFAZ MAIN
 # =============================================================================
 def main():
-    st.title("🏦 SIDERA - Controlador de Operaciones")
-    
     api_key = st.secrets.get("ANTHROPIC_API_KEY", os.getenv("ANTHROPIC_API_KEY"))
 
-    # INICIALIZAR ESTADOS
+    # INICIALIZAR ESTADOS (Fundamentales para que no se borre la data)
     if 'pendientes' not in st.session_state:
-        st.session_state.pendientes = pd.DataFrame([{"Listo": False, "Titular": "", "Monto": ""}] * 5)
+        st.session_state.pendientes = pd.DataFrame([{"Listo": False, "Titular": "", "Monto": ""}] * 10)
     if 'extracciones' not in st.session_state:
         st.session_state.extracciones = None
+    if 'uploader_key' not in st.session_state:
+        st.session_state.uploader_key = 0 # Llave maestra para borrar archivos
 
-    # --- SIDEBAR: CONTROL DE PENDIENTES ---
-    with st.sidebar:
-        st.header("📝 Transferencias Pendientes")
-        st.markdown("Anotá acá las que piden por WhatsApp hasta que llegue el comprobante.")
+    st.title("🏦 SIDERA - Controlador de Operaciones")
+
+    # TABS PARA SEPARAR EL BLOC DE NOTAS DEL PROCESADOR
+    tab_pendientes, tab_procesador = st.tabs(["📝 Bloc de Pendientes", "⚙️ Procesador de Comprobantes"])
+
+    # --- PESTAÑA 1: BLOC DE NOTAS SEGURO ---
+    with tab_pendientes:
+        st.markdown("### Anotador de Transferencias")
+        st.markdown("Este cuadro no se borra. Escribí tranquilo.")
         
-        # Tabla editable interactiva
+        # KEY asignada para que el widget mantenga su estado
         edited_pendientes = st.data_editor(
             st.session_state.pendientes,
+            key="editor_fijo_pendientes", 
             column_config={
                 "Listo": st.column_config.CheckboxColumn("Listo", default=False),
                 "Titular": st.column_config.TextColumn("Titular / Cuenta"),
                 "Monto": st.column_config.TextColumn("Monto Solicitado")
             },
             hide_index=True,
-            num_rows="dynamic"
+            num_rows="dynamic",
+            use_container_width=True
         )
-        # Botón para limpiar los terminados
+        
         if st.button("🧹 Borrar marcados como 'Listo'"):
             st.session_state.pendientes = edited_pendientes[edited_pendientes["Listo"] == False].reset_index(drop=True)
-            # Asegurar que siempre haya filas vacías
-            if len(st.session_state.pendientes) < 3:
-                extras = pd.DataFrame([{"Listo": False, "Titular": "", "Monto": ""}] * 3)
+            if len(st.session_state.pendientes) < 5:
+                extras = pd.DataFrame([{"Listo": False, "Titular": "", "Monto": ""}] * 5)
                 st.session_state.pendientes = pd.concat([st.session_state.pendientes, extras], ignore_index=True)
             st.rerun()
         else:
             st.session_state.pendientes = edited_pendientes
 
-        st.markdown("---")
-        st.info(f"API Key: {'✅ Configurada' if api_key else '❌ Falta'}")
+    # --- PESTAÑA 2: PROCESAMIENTO ---
+    with tab_procesador:
+        
+        if not api_key:
+            st.error("⚠️ Falta configurar la API Key.")
+            return
 
-    # --- ÁREA PRINCIPAL ---
-    # PASO 1: CARGA Y EXTRACCIÓN
-    archivos = st.file_uploader("1. Sube los comprobantes (ZIP, JPG, PDF)", accept_multiple_files=True)
-    
-    if archivos and st.button("🚀 Extraer Datos (Paso 1)", type="primary"):
-        if not api_key: st.error("Falta API Key"); return
+        # PASO 1: CARGA Y EXTRACCIÓN (Usa la uploader_key para poder ser reseteado)
+        archivos = st.file_uploader("1. Sube los comprobantes (ZIP, JPG, PDF)", 
+                                    accept_multiple_files=True, 
+                                    key=f"uploader_{st.session_state.uploader_key}")
         
-        archivos_listos = procesar_archivos_zip(archivos)
-        resultados = []
-        
-        progreso = st.progress(0)
-        for i, (nombre, cont, mime) in enumerate(archivos_listos):
-            datos = extraer_datos_con_vision(cont, nombre, mime, api_key)
-            datos["Asignar a Cuenta"] = "Seleccionar..." # Campo para el Paso 2
-            resultados.append(datos)
-            progreso.progress((i + 1) / len(archivos_listos))
-            time.sleep(3) # Freno de mano anti-overload
+        if archivos and st.button("🚀 Extraer Datos (Paso 1)", type="primary"):
+            archivos_listos = procesar_archivos_zip(archivos)
+            resultados = []
             
-        progreso.empty()
-        st.session_state.extracciones = resultados
-        st.success("Extracción completada. Pasa al Paso 2.")
-
-    # PASO 2: ASIGNACIÓN MANUAL (Data Editor)
-    if st.session_state.extracciones is not None:
-        st.header("2. Asignación de Comprobantes")
-        st.markdown("Mirá el monto y asignale la cuenta a cada comprobante. Luego generá los asientos.")
-        
-        df_extraido = pd.DataFrame(st.session_state.extracciones)
-        
-        opciones_cuentas = [
-            "Seleccionar...", 
-            "Giardino", "Cta Cte", "Celso", "Canella", "Vertice", 
-            "Nexo Directo (Pega en Col C)", "Ignorar"
-        ]
-        
-        # Editor visual donde el usuario elige la cuenta
-        df_editado = st.data_editor(
-            df_extraido,
-            column_config={
-                "archivo": st.column_config.TextColumn("Archivo", disabled=True),
-                "monto": st.column_config.TextColumn("Monto Extraído", disabled=True),
-                "emisor": st.column_config.TextColumn("Emisor / ID", disabled=True),
-                "id_operacion": None, # Ocultar para limpiar pantalla
-                "Asignar a Cuenta": st.column_config.SelectboxColumn(
-                    "📌 Asignar a:", options=opciones_cuentas, required=True
-                )
-            },
-            hide_index=True,
-            use_container_width=True
-        )
-
-        # PASO 3: GENERACIÓN FINAL
-        if st.button("⚡ Generar Textos de Doble Partida (Paso 3)", type="primary"):
-            
-            # Agrupar los resultados por hoja de destino
-            bloques_finales = {
-                "Nexo": [],
-                "Giardino": [],
-                "Cta Cte": [],
-                "Celso": [],
-                "Canella": [],
-                "Vertice": []
-            }
-
-            for _, row in df_editado.iterrows():
-                cuenta = row["Asignar a Cuenta"]
-                if cuenta in ["Seleccionar...", "Ignorar"]:
-                    continue
+            progreso = st.progress(0)
+            for i, (nombre, cont, mime) in enumerate(archivos_listos):
+                datos = extraer_datos_con_vision(cont, nombre, mime, api_key)
+                datos["Asignar a Cuenta"] = "Seleccionar..."
+                resultados.append(datos)
+                progreso.progress((i + 1) / len(archivos_listos))
+                time.sleep(3) # Freno anti-overload
                 
-                asientos = generar_asientos(row["emisor"], row["monto"], row.get("id_operacion",""), cuenta)
-                
-                if "Nexo" in asientos:
-                    bloques_finales["Nexo"].append(asientos["Nexo"])
-                
-                if cuenta in bloques_finales and cuenta in asientos:
-                    bloques_finales[cuenta].append(asientos[cuenta])
+            progreso.empty()
+            st.session_state.extracciones = resultados
+            st.success("✅ Extracción completada.")
+            st.rerun()
 
-            # MOSTRAR RESULTADOS ORDENADOS PARA COPIAR Y PEGAR
-            st.header("📋 Textos Listos para Pegar")
-            st.warning("⚠️ Asegurate de pegar en la **COLUMNA B** de cada hoja (salvo Nexo Directo que pega en C).")
+        # PASO 2: ASIGNACIÓN MANUAL
+        if st.session_state.extracciones is not None:
+            st.header("2. Asignación de Comprobantes")
             
-            col1, col2 = st.columns(2)
+            df_extraido = pd.DataFrame(st.session_state.extracciones)
+            opciones_cuentas = [
+                "Seleccionar...", 
+                "Giardino", "Cta Cte", "Celso", "Canella", "Vertice", 
+                "Nexo Directo (Pega en Col C)", "Ignorar"
+            ]
             
-            with col1:
-                st.subheader("Hoja: NEXO")
-                texto_nexo = "\n".join(bloques_finales["Nexo"])
-                st.code(texto_nexo if texto_nexo else "No hay movimientos para Nexo")
+            df_editado = st.data_editor(
+                df_extraido,
+                key="editor_extracciones",
+                column_config={
+                    "archivo": st.column_config.TextColumn("Archivo", disabled=True),
+                    "monto": st.column_config.TextColumn("Monto Extraído", disabled=True),
+                    "emisor": st.column_config.TextColumn("Emisor / ID", disabled=True),
+                    "id_operacion": None, 
+                    "Asignar a Cuenta": st.column_config.SelectboxColumn("📌 Asignar a:", options=opciones_cuentas, required=True)
+                },
+                hide_index=True,
+                use_container_width=True
+            )
 
-            with col2:
-                st.subheader("Hojas de Clientes (Contrapartidas)")
-                for cliente in ["Giardino", "Cta Cte", "Celso", "Canella", "Vertice"]:
-                    if bloques_finales[cliente]:
-                        st.markdown(f"**Hoja: {cliente}**")
-                        st.code("\n".join(bloques_finales[cliente]))
+            # PASO 3: GENERACIÓN FINAL
+            if st.button("⚡ Generar Textos de Doble Partida (Paso 3)", type="primary"):
+                
+                bloques_finales = {"Nexo": [], "Giardino": [], "Cta Cte": [], "Celso": [], "Canella": [], "Vertice": []}
 
-            if st.button("🔄 Limpiar todo e Iniciar nuevo lote"):
+                for _, row in df_editado.iterrows():
+                    cuenta = row["Asignar a Cuenta"]
+                    if cuenta in ["Seleccionar...", "Ignorar"]:
+                        continue
+                    
+                    asientos = generar_asientos(row["emisor"], row["monto"], row.get("id_operacion",""), cuenta)
+                    
+                    if "Nexo" in asientos:
+                        bloques_finales["Nexo"].append(asientos["Nexo"])
+                    
+                    if cuenta in bloques_finales and cuenta in asientos:
+                        bloques_finales[cuenta].append(asientos[cuenta])
+
+                st.header("📋 Textos Listos para Pegar")
+                st.warning("⚠️ Asegurate de pegar en la **COLUMNA B** de cada hoja (salvo Nexo Directo que pega en C). El texto del chip lo ponés a mano.")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("Hoja: NEXO")
+                    texto_nexo = "\n".join(bloques_finales["Nexo"])
+                    st.code(texto_nexo if texto_nexo else "No hay movimientos para Nexo")
+
+                with col2:
+                    st.subheader("Hojas de Clientes (Contrapartidas)")
+                    for cliente in ["Giardino", "Cta Cte", "Celso", "Canella", "Vertice"]:
+                        if bloques_finales[cliente]:
+                            st.markdown(f"**Hoja: {cliente}**")
+                            st.code("\n".join(bloques_finales[cliente]))
+
+            # BOTÓN NUKE (Limpia todo absolutamente todo)
+            st.markdown("---")
+            if st.button("🔄 Borrar Comprobantes y Empezar de Nuevo"):
                 st.session_state.extracciones = None
+                st.session_state.uploader_key += 1 # Esto obliga al cuadro de archivos a resetearse
                 st.rerun()
 
 if __name__ == "__main__":
