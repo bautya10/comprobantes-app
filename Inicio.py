@@ -284,8 +284,9 @@ def generar_asientos_doble_partida(emisor: str, monto: str, id_op: str, cuenta: 
         asientos[cuenta] = f',,,,,,,{"".join(monto_limpio)}' 
         
     elif cuenta in ["Celso", "Canella", "Vertice"]:
-        asientos["Nexo"] = f',"{emisor}",,,,,,,,{monto_limpio}' 
-        asientos[cuenta] = f',"{emisor}",,,,,,,,,{monto_limpio}' 
+        # ACÁ ESTÁ EL CAMBIO: Se eliminó la coma inicial antes de las comillas
+        asientos["Nexo"] = f'"{emisor}",,,,,,,,{monto_limpio}' 
+        asientos[cuenta] = f'"{emisor}",,,,,,,,,{monto_limpio}' 
         
     elif cuenta == "Nexo Directo (Pega en Col C)":
         asientos["Nexo"] = f'"{emisor}",,,,,,,,{monto_limpio}' 
