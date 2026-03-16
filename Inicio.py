@@ -113,7 +113,7 @@ def extraer_datos_con_vision_api(archivo_contenido: bytes, nombre_archivo: str,
         with st.spinner(f'🤖 Procesando {nombre_archivo} con Claude...'):
             # MODELO OFICIAL ESTABLE DE ANTHROPIC
             message = client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-sonnet-4-6",
                 max_tokens=1024,
                 messages=[{
                     "role": "user",
