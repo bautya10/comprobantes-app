@@ -143,7 +143,7 @@ def extraer_datos_con_vision_api(archivo_contenido: bytes, nombre_archivo: str,
 - emisor: Nombre completo de quien ENVÍA el dinero (ver reglas arriba)
 - monto: Cantidad transferida (número con formato, incluye $ si está visible)
 - destinatario: Nombre completo de quien RECIBE el dinero
-- id_operacion: Número o código único de la operación/transacción (puede estar como "Nro de operación", "ID", "Código", etc.)
+- id_operacion: Número o código único de la operación/transacción (puede estar como "Nro de operación", "ID", "Código", etc.). Extrae solo los números/letras, sin la palabra "ID".
 - fecha: Fecha de la operación en formato YYYY-MM-DD
 - horario: Hora de la operación en formato HH:MM:SS (si solo hay HH:MM, agrega :00 al final)
 
@@ -220,19 +220,6 @@ def aplicar_logica_formateo(datos: Dict[str, str]) -> Tuple[str, str, str]:
 
     return linea, emisor, id_operacion
 
-def detectar_duplicados(procesados: List[Dict[str, str]]) -> List[str]:
-    ids_vistos = {}
-    duplicados = []
-    for item in procesados:
-        id_op = item.get("id_operacion", "")
-        if id_op:
-            if id_op in ids_vistos:
-                if id_op not in duplicados:
-                    duplicados.append(id_op)
-            else:
-                ids_vistos[id_op] = True
-    return duplicados
-
 # =============================================================================
 # FUNCIONES DE MANEJO DE ARCHIVOS
 # =============================================================================
@@ -272,7 +259,7 @@ def procesar_archivos_cargados(archivos_subidos) -> List[Tuple[str, bytes, str]]
     return archivos_procesados
 
 # =============================================================================
-# LÓGICA DE DOBLE PARTIDA (SECCIÓN NUEVA)
+# LÓGICA DE DOBLE PARTIDA
 # =============================================================================
 def generar_asientos_doble_partida(emisor: str, monto: str, id_op: str, cuenta: str) -> Dict[str, str]:
     emisor = emisor if emisor else (id_op if id_op else "FALTA_NOMBRE")
@@ -284,7 +271,6 @@ def generar_asientos_doble_partida(emisor: str, monto: str, id_op: str, cuenta: 
         asientos[cuenta] = f',,,,,,,{"".join(monto_limpio)}' 
         
     elif cuenta in ["Celso", "Canella", "Vertice"]:
-        # ACÁ ESTÁ EL CAMBIO: Se eliminó la coma inicial antes de las comillas
         asientos["Nexo"] = f'"{emisor}",,,,,,,,{monto_limpio}' 
         asientos[cuenta] = f'"{emisor}",,,,,,,,,{monto_limpio}' 
         
@@ -342,7 +328,6 @@ def main():
                 return
             
             resultados = []
-            datos_completos = []
             progress_bar = st.progress(0)
             status_text = st.empty()
             
@@ -351,7 +336,6 @@ def main():
                 progress_bar.progress(progress)
                 status_text.text(f"Procesando {idx + 1}/{len(archivos_a_procesar)}: {nombre}")
                 
-                # Extracción base original
                 datos_extraidos = extraer_datos_con_vision_api(contenido, nombre, tipo_mime)
                 linea_formateada, emisor, id_op = aplicar_logica_formateo(datos_extraidos)
                 
@@ -364,9 +348,7 @@ def main():
                     "datos_raw": datos_extraidos
                 }
                 resultados.append(resultado)
-                datos_completos.append(datos_extraidos)
                 
-                # FRENO ANTI OVERLOAD
                 time.sleep(3)
             
             progress_bar.empty()
@@ -374,24 +356,25 @@ def main():
             
             st.session_state.resultados_anteriores = resultados
 
-    # MOSTRAR RESULTADOS (Mantiene tu visualización original + Paso 2)
     if 'resultados_anteriores' in st.session_state:
         resultados = st.session_state.resultados_anteriores
         
         st.header("📊 Resultados de Extracción")
-        tab1, tab2, tab3 = st.tabs(["📋 Formato Original", "🔍 Detalle", "📝 Datos Crudos"])
+        tab1, tab2, tab3 = st.tabs(["📋 Formato Original", "🔍 Detalle e IDs", "📝 Datos Crudos"])
+        
         with tab1:
             lineas_salida = [r["linea"] for r in resultados]
             st.code("\n".join(lineas_salida), language=None)
+            
         with tab2:
             for r in resultados:
-                st.markdown(f"**Archivo:** {r['archivo']} | **Resultado:** {r['linea']}")
+                st.markdown(f"**Archivo:** {r['archivo']} | **Resultado:** `{r['linea']}` | **🆔 ID:** `{r['id_operacion']}`")
+                
         with tab3:
             st.json(resultados)
 
         st.markdown("---")
         
-        # EL NUEVO SELECTOR PARA DOBLE PARTIDA
         st.header("🎯 2. Asignar Cuentas para Doble Partida")
         opciones = ["Seleccionar...", "Giardino", "Cta Cte", "Celso", "Canella", "Vertice", "Nexo Directo (Pega en Col C)", "Ignorar"]
         
@@ -401,7 +384,8 @@ def main():
             for idx, res in enumerate(resultados):
                 colA, colB = st.columns([2, 1])
                 with colA:
-                    st.write(f"📄 **{res['archivo']}** | 👤 {res['emisor']} | 💰 ${res['monto']}")
+                    # AHORA EL ID DE OPERACIÓN SE VE GRANDE Y CLARO ACÁ TAMBIÉN
+                    st.write(f"📄 **{res['archivo']}** | 👤 {res['emisor']} | 🆔 **{res['id_operacion'] if res['id_operacion'] else 'N/A'}** | 💰 ${res['monto']}")
                 with colB:
                     sel = st.selectbox("Asignar a:", opciones, key=f"sel_dp_{idx}", label_visibility="collapsed")
                     selecciones.append(sel)
