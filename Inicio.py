@@ -272,7 +272,7 @@ def procesar_archivos_cargados(archivos_subidos) -> List[Tuple[str, bytes, str]]
     return archivos_procesados
 
 # =============================================================================
-# LÓGICA DE DOBLE PARTIDA (SECCIÓN NUEVA CON CELSO)
+# LÓGICA DE DOBLE PARTIDA (CON CELSO INYECTANDO ID EN COLUMNA D)
 # =============================================================================
 def generar_asientos_doble_partida(emisor: str, monto: str, id_op: str, cuenta: str) -> Dict[str, str]:
     emisor = emisor if emisor else (id_op if id_op else "FALTA_NOMBRE")
@@ -289,7 +289,7 @@ def generar_asientos_doble_partida(emisor: str, monto: str, id_op: str, cuenta: 
         
     elif cuenta == "Celso":
         asientos["Nexo"] = f'"{emisor}",,,,,,,,{monto_limpio}' 
-        # ID inyectado en la Columna D (2 comas, luego el ID, luego 7 comas para llegar a L)
+        # ACÁ ESTÁ EL CAMBIO DE CELSO: ID inyectado después de las primeras 2 comas (Col D)
         asientos[cuenta] = f'"{emisor}",,"{id_op}",,,,,,,{monto_limpio}' 
         
     elif cuenta == "Nexo Directo (Pega en Col C)":
@@ -321,8 +321,13 @@ def main():
           → `"EMISOR",,,,,,,,MONTO`
         - Si destinatario = Otro → `MONTO`
         """)
+
+    # --- ACÁ ESTÁ EL SELECTOR PREVIO QUE PEDISTE ---
+    st.header("👤 1. Seleccionar Quién Envía")
+    opciones_cliente = ["Celso", "Canella", "Vertice", "Giardino", "Cta Cte", "Nexo Directo (Pega en Col C)"]
+    cliente_seleccionado = st.selectbox("Elige el cliente para todo este lote:", opciones_cliente)
     
-    st.header("📤 1. Cargar Comprobantes")
+    st.header("📤 2. Cargar Comprobantes")
     archivos_subidos = st.file_uploader(
         "Selecciona uno o más archivos (imágenes, PDFs o ZIPs)",
         type=['jpg', 'jpeg', 'png', 'pdf', 'zip'],
@@ -378,7 +383,7 @@ def main():
             
             st.session_state.resultados_anteriores = resultados
 
-    # MOSTRAR RESULTADOS (Mantiene tu visualización original + Paso 2)
+    # MOSTRAR RESULTADOS
     if 'resultados_anteriores' in st.session_state:
         resultados = st.session_state.resultados_anteriores
         
@@ -389,53 +394,35 @@ def main():
             st.code("\n".join(lineas_salida), language=None)
         with tab2:
             for r in resultados:
-                st.markdown(f"**Archivo:** {r['archivo']} | **Resultado:** {r['linea']}")
+                # LE AGREGUÉ EL ID ACÁ PARA QUE LO VEAS CLARITO EN EL DETALLE
+                st.markdown(f"**Archivo:** {r['archivo']} | **Resultado:** `{r['linea']}` | **🆔 ID:** `{r.get('id_operacion', '')}`")
         with tab3:
             st.json(resultados)
 
         st.markdown("---")
         
-        # EL SELECTOR PARA DOBLE PARTIDA
-        st.header("🎯 2. Asignar Cuentas para Doble Partida")
-        opciones = ["Seleccionar...", "Giardino", "Cta Cte", "Celso", "Canella", "Vertice", "Nexo Directo (Pega en Col C)", "Ignorar"]
+        # ACA GENERA LA DOBLE PARTIDA AUTOMATICAMENTE USANDO EL SELECTOR DE ARRIBA
+        st.header(f"🎯 3. Doble Partida para {cliente_seleccionado}")
         
-        with st.form("form_doble_partida"):
-            st.markdown("Seleccioná de quién es cada comprobante para armar las contrapartidas automáticas.")
-            selecciones = []
-            for idx, res in enumerate(resultados):
-                colA, colB = st.columns([2, 1])
-                with colA:
-                    # AGREGADO: Mostrar ID en la vista para control visual
-                    st.write(f"📄 **{res['archivo']}** | 👤 {res['emisor']} | 🆔 **{res.get('id_operacion', '')}** | 💰 ${res['monto']}")
-                with colB:
-                    sel = st.selectbox("Asignar a:", opciones, key=f"sel_dp_{idx}", label_visibility="collapsed")
-                    selecciones.append(sel)
-                st.markdown("---")
-            
-            btn_generar = st.form_submit_button("⚡ Generar Textos de Contrapartidas", type="primary")
-            
-        if btn_generar:
-            bloques = {"Nexo": [], "Giardino": [], "Cta Cte": [], "Celso": [], "Canella": [], "Vertice": []}
+        bloques = {"Nexo": [], "Giardino": [], "Cta Cte": [], "Celso": [], "Canella": [], "Vertice": []}
 
-            for idx, res in enumerate(resultados):
-                cuenta = selecciones[idx]
-                if cuenta in ["Seleccionar...", "Ignorar"]: continue
-                
-                asientos = generar_asientos_doble_partida(res["emisor"], res["monto"], res.get("id_operacion", ""), cuenta)
-                if "Nexo" in asientos: bloques["Nexo"].append(asientos["Nexo"])
-                if cuenta in bloques and cuenta in asientos: bloques[cuenta].append(asientos[cuenta])
+        for res in resultados:
+            asientos = generar_asientos_doble_partida(res["emisor"], res["monto"], res.get("id_operacion", ""), cliente_seleccionado)
+            if "Nexo" in asientos: bloques["Nexo"].append(asientos["Nexo"])
+            if cliente_seleccionado in bloques and cliente_seleccionado in asientos: 
+                bloques[cliente_seleccionado].append(asientos[cliente_seleccionado])
 
-            st.success("✅ Asientos generados (Listos para pegar en Columna B)")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.subheader("Hoja: NEXO")
-                st.code("\n".join(bloques["Nexo"]) if bloques["Nexo"] else "Sin datos")
-            with c2:
-                st.subheader("Hojas: CLIENTES")
-                for cliente in ["Giardino", "Cta Cte", "Celso", "Canella", "Vertice"]:
-                    if bloques[cliente]:
-                        st.markdown(f"**{cliente}**")
-                        st.code("\n".join(bloques[cliente]))
+        st.success("✅ Asientos generados (Listos para pegar en Columna B)")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Hoja: NEXO")
+            st.code("\n".join(bloques["Nexo"]) if bloques["Nexo"] else "Sin datos")
+        with c2:
+            st.subheader(f"Hoja: {cliente_seleccionado.upper()}")
+            if cliente_seleccionado in bloques and bloques[cliente_seleccionado]:
+                st.code("\n".join(bloques[cliente_seleccionado]))
+            else:
+                st.write(f"No hay bloque específico para {cliente_seleccionado}")
 
 if __name__ == "__main__":
     main()
