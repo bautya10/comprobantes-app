@@ -8,7 +8,7 @@ import re
 import zipfile
 import io
 from datetime import datetime
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from pathlib import Path
 import base64
 import json
@@ -41,11 +41,15 @@ st.set_page_config(
 # =============================================================================
 
 def limpiar_nombre(nombre: str) -> str:
-    if not nombre: return ""
+    """Limpia el nombre del emisor removiendo comas internas."""
+    if not nombre:
+        return ""
     return nombre.replace(",", "").strip()
 
 def limpiar_monto(monto_str: str) -> str:
-    if not monto_str: return "0"
+    """Limpia el monto según las reglas estrictas."""
+    if not monto_str:
+        return "0"
     
     monto = re.sub(r'[$USD€ARS\s]', '', monto_str)
     if re.search(r'[.,]\d{2}$', monto):
@@ -66,19 +70,25 @@ def limpiar_monto(monto_str: str) -> str:
     return monto.strip()
 
 def pdf_a_imagen_png(pdf_bytes: bytes) -> bytes:
+    """Convierte la primera página de un PDF a PNG en memoria."""
     import fitz  # pymupdf
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pagina = doc[0]
+    # BAJADO A 2.0 PARA QUE NO EXPLOTE LA MAC NI LA API
     mat = fitz.Matrix(2.0, 2.0)
     pix = pagina.get_pixmap(matrix=mat)
     return pix.tobytes("png")
 
-def extraer_datos_con_vision_api(archivo_contenido: bytes, nombre_archivo: str, tipo_archivo: str) -> Dict[str, str]:
+def extraer_datos_con_vision_api(archivo_contenido: bytes, nombre_archivo: str, 
+                                 tipo_archivo: str) -> Dict[str, str]:
+    """Extrae datos del comprobante usando Anthropic Claude Vision API."""
+    
     api_key = st.secrets.get("ANTHROPIC_API_KEY", None) if hasattr(st, "secrets") else None
-    if not api_key: api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        api_key = os.getenv("ANTHROPIC_API_KEY")
 
     if not api_key:
-        st.error("⚠️ API Key no configurada.")
+        st.error("⚠️ API Key no configurada. Configura ANTHROPIC_API_KEY en Secrets (Streamlit Cloud) o en el archivo .env (local)")
         return {"emisor": "", "monto": "0", "destinatario": "", "id_operacion": "", "fecha": "", "horario": ""}
     
     try:
@@ -91,21 +101,34 @@ def extraer_datos_con_vision_api(archivo_contenido: bytes, nombre_archivo: str, 
             except Exception as e:
                 st.error(f"❌ No se pudo convertir el PDF '{nombre_archivo}': {e}")
                 return {"emisor": "", "monto": "0", "destinatario": "", "id_operacion": "", "fecha": "", "horario": ""}
-        elif tipo_archivo in ['image/jpeg', 'image/jpg']: media_type = 'image/jpeg'
-        elif tipo_archivo == 'image/png': media_type = 'image/png'
-        else: media_type = 'image/jpeg'
+        elif tipo_archivo in ['image/jpeg', 'image/jpg']:
+            media_type = 'image/jpeg'
+        elif tipo_archivo == 'image/png':
+            media_type = 'image/png'
+        else:
+            media_type = 'image/jpeg'
 
         base64_data = base64.b64encode(archivo_contenido).decode('utf-8')
 
         with st.spinner(f'🤖 Procesando {nombre_archivo} con Claude...'):
+            # MODELO OFICIAL ESTABLE DE ANTHROPIC
             message = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=1024,
                 messages=[{
                     "role": "user",
                     "content": [
-                        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": base64_data}},
-                        {"type": "text", "text": '''Analiza este comprobante bancario y extrae EXACTAMENTE estos campos:
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": base64_data,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": '''Analiza este comprobante bancario y extrae EXACTAMENTE estos campos:
 
 **IMPORTANTE - Reglas especiales para el EMISOR:**
 - El EMISOR es quien ENVÍA el dinero (quien hace la transferencia)
@@ -113,6 +136,7 @@ def extraer_datos_con_vision_api(archivo_contenido: bytes, nombre_archivo: str, 
 - En Ualá: busca "De" o "Enviaste desde" o el nombre del usuario que envía
 - En Mercado Pago: busca "Enviaste dinero a" o el remitente
 - Si hay un alias o CVU pero también un nombre, usa el NOMBRE, no el alias
+- Si solo aparece un alias/CVU sin nombre, usa el alias
 - NO confundas emisor con destinatario (quien recibe)
 
 **Campos a extraer:**
@@ -136,23 +160,78 @@ Ejemplo de respuesta correcta:
     "id_operacion": "123456789",
     "fecha": "2024-02-11",
     "horario": "14:30:00"
-}'''}
+}'''
+                        }
                     ]
                 }]
             )
         
-        response_text = message.content[0].text.strip().replace('```json', '').replace('```', '').strip()
+        response_text = message.content[0].text.strip()
+        response_text = response_text.replace('```json', '').replace('```', '').strip()
         datos = json.loads(response_text)
         
         claves_requeridas = ["emisor", "monto", "destinatario", "id_operacion", "fecha", "horario"]
         for clave in claves_requeridas:
-            if clave not in datos: datos[clave] = ""
+            if clave not in datos:
+                datos[clave] = ""
         
         return datos
         
+    except anthropic.APIError as e:
+        st.error(f"❌ Error de API de Anthropic: {str(e)}")
+        return {"emisor": "", "monto": "0", "destinatario": "", "id_operacion": "", "fecha": "", "horario": ""}
+    except json.JSONDecodeError as e:
+        st.error(f"❌ Error al parsear JSON: {str(e)}")
+        return {"emisor": "", "monto": "0", "destinatario": "", "id_operacion": "", "fecha": "", "horario": ""}
     except Exception as e:
         st.error(f"❌ Error inesperado al procesar {nombre_archivo}: {str(e)}")
         return {"emisor": "", "monto": "0", "destinatario": "", "id_operacion": "", "fecha": "", "horario": ""}
+
+def aplicar_logica_formateo(datos: Dict[str, str]) -> Tuple[str, str, str]:
+    emisor_raw = datos.get("emisor", "")
+    monto_raw = datos.get("monto", "")
+    destinatario = datos.get("destinatario", "").strip()
+    id_operacion = datos.get("id_operacion", "")
+    fecha = datos.get("fecha", "")
+    horario = datos.get("horario", "")
+    
+    emisor = limpiar_nombre(emisor_raw)
+    
+    if not emisor:
+        if id_operacion:
+            emisor = id_operacion
+        elif fecha and horario:
+            emisor = f"{fecha} {horario}"
+        else:
+            emisor = "SIN_EMISOR"
+    
+    monto = limpiar_monto(monto_raw)
+    destinatario_lower = destinatario.lower()
+    
+    # REGLAS DE DESTINATARIOS IMPORTANTES
+    es_jessica = "jessica" in destinatario_lower and "giuliani" in destinatario_lower
+    es_credibank = "credibank" in destinatario_lower
+    es_ganadera = "estancia la ganadera" in destinatario_lower or "ganadera srl" in destinatario_lower
+
+    if es_jessica or es_credibank or es_ganadera:
+        linea = f'"{emisor}",,,,,,,,{monto}'
+    else:
+        linea = monto
+
+    return linea, emisor, id_operacion
+
+def detectar_duplicados(procesados: List[Dict[str, str]]) -> List[str]:
+    ids_vistos = {}
+    duplicados = []
+    for item in procesados:
+        id_op = item.get("id_operacion", "")
+        if id_op:
+            if id_op in ids_vistos:
+                if id_op not in duplicados:
+                    duplicados.append(id_op)
+            else:
+                ids_vistos[id_op] = True
+    return duplicados
 
 # =============================================================================
 # FUNCIONES DE MANEJO DE ARCHIVOS
@@ -166,12 +245,17 @@ def extraer_archivos_zip(archivo_zip: bytes) -> List[Tuple[str, bytes, str]]:
                     nombre = file_info.filename
                     contenido = zip_ref.read(nombre)
                     extension = Path(nombre).suffix.lower()
-                    if extension in ['.jpg', '.jpeg']: tipo_mime = 'image/jpeg'
-                    elif extension == '.png': tipo_mime = 'image/png'
-                    elif extension == '.pdf': tipo_mime = 'application/pdf'
-                    else: tipo_mime = 'application/octet-stream'
+                    if extension in ['.jpg', '.jpeg']:
+                        tipo_mime = 'image/jpeg'
+                    elif extension == '.png':
+                        tipo_mime = 'image/png'
+                    elif extension == '.pdf':
+                        tipo_mime = 'application/pdf'
+                    else:
+                        tipo_mime = 'application/octet-stream'
                     archivos.append((nombre, contenido, tipo_mime))
-    except Exception as e: st.error(f"❌ Error al extraer ZIP: {str(e)}")
+    except Exception as e:
+        st.error(f"❌ Error al extraer ZIP: {str(e)}")
     return archivos
 
 def procesar_archivos_cargados(archivos_subidos) -> List[Tuple[str, bytes, str]]:
@@ -180,41 +264,36 @@ def procesar_archivos_cargados(archivos_subidos) -> List[Tuple[str, bytes, str]]
         contenido = archivo_subido.read()
         nombre = archivo_subido.name
         tipo = archivo_subido.type
-        if nombre.lower().endswith('.zip'): archivos_procesados.extend(extraer_archivos_zip(contenido))
-        else: archivos_procesados.append((nombre, contenido, tipo))
+        if nombre.lower().endswith('.zip'):
+            archivos_zip = extraer_archivos_zip(contenido)
+            archivos_procesados.extend(archivos_zip)
+        else:
+            archivos_procesados.append((nombre, contenido, tipo))
     return archivos_procesados
 
 # =============================================================================
-# LÓGICA DE DOBLE PARTIDA (NUEVO FLUJO)
+# LÓGICA DE DOBLE PARTIDA (SECCIÓN MODIFICADA PARA CELSO)
 # =============================================================================
-def generar_asientos_por_cliente(datos: Dict[str, str], cliente_seleccionado: str) -> Dict[str, str]:
-    """Genera las líneas de texto según el cliente preseleccionado."""
+def generar_asientos_doble_partida(emisor: str, monto: str, id_op: str, cuenta: str) -> Dict[str, str]:
+    emisor = emisor if emisor else (id_op if id_op else "FALTA_NOMBRE")
+    monto_limpio = "".join(monto.split()) 
+    asientos = {}
     
-    emisor_raw = datos.get("emisor", "")
-    id_op = datos.get("id_operacion", "")
-    monto_raw = datos.get("monto", "")
-    
-    emisor = limpiar_nombre(emisor_raw)
-    if not emisor: emisor = id_op if id_op else "FALTA_NOMBRE"
-    
-    monto_limpio = "".join(limpiar_monto(monto_raw).split())
-    asientos = {"Nexo": "", "Cliente": ""}
-    
-    if cliente_seleccionado in ["Giardino", "Cta Cte"]:
-        asientos["Nexo"] = f',,,,,,,,,,{"".join(monto_limpio)}'
-        asientos["Cliente"] = f',,,,,,,{"".join(monto_limpio)}'
+    if cuenta in ["Giardino", "Cta Cte"]:
+        asientos["Nexo"] = f',,,,,,,,,,{"".join(monto_limpio)}' 
+        asientos[cuenta] = f',,,,,,,{"".join(monto_limpio)}' 
         
-    elif cliente_seleccionado in ["Canella", "Vertice"]:
-        asientos["Nexo"] = f'"{emisor}",,,,,,,,{monto_limpio}'
-        asientos["Cliente"] = f'"{emisor}",,,,,,,,,{monto_limpio}'
+    elif cuenta in ["Canella", "Vertice"]:
+        asientos["Nexo"] = f'"{emisor}",,,,,,,,{monto_limpio}' 
+        asientos[cuenta] = f'"{emisor}",,,,,,,,,{monto_limpio}' 
         
-    elif cliente_seleccionado == "Celso":
-        asientos["Nexo"] = f'"{emisor}",,,,,,,,{monto_limpio}'
-        # LÓGICA ESPECIAL CELSO: ID en Columna D (2 comas antes, 6 después para llegar a L)
-        asientos["Cliente"] = f'"{emisor}",,"{id_op}",,,,,,,{monto_limpio}'
+    elif cuenta == "Celso":
+        # Celso requiere el ID en la Columna D (agregamos el id_op separado por comas)
+        asientos["Nexo"] = f'"{emisor}",,,,,,,,{monto_limpio}' 
+        asientos[cuenta] = f'"{emisor}",,"{id_op}",,,,,,,{monto_limpio}'
         
-    elif cliente_seleccionado == "Nexo Directo (Pega en Col C)":
-        asientos["Nexo"] = f'"{emisor}",,,,,,,,{monto_limpio}'
+    elif cuenta == "Nexo Directo (Pega en Col C)":
+        asientos["Nexo"] = f'"{emisor}",,,,,,,,{monto_limpio}' 
         
     return asientos
 
@@ -222,99 +301,142 @@ def generar_asientos_por_cliente(datos: Dict[str, str], cliente_seleccionado: st
 # INTERFAZ DE STREAMLIT
 # =============================================================================
 def main():
-    st.title("🏦 Generador de Doble Partida")
+    st.title("🏦 Extractor y Formateador de Comprobantes")
     
     api_key = st.secrets.get("ANTHROPIC_API_KEY", None) if hasattr(st, "secrets") else None
-    if not api_key: api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        api_key = os.getenv("ANTHROPIC_API_KEY")
 
     with st.sidebar:
-        st.header("⚙️ Configuración del Lote")
-        if not api_key: st.error("⚠️ API Key NO configurada")
+        st.header("ℹ️ Información")
+        if api_key:
+            st.success("✅ API Key configurada")
+        else:
+            st.error("⚠️ API Key NO configurada")
             
         st.markdown("---")
-        # 1. SELECTOR GLOBAL
-        st.subheader("1. ¿De quién son estos comprobantes?")
-        opciones_clientes = ["Celso", "Canella", "Vertice", "Giardino", "Cta Cte", "Nexo Directo (Pega en Col C)"]
-        cliente_global = st.selectbox("Cliente:", opciones_clientes)
-        
-        if cliente_global == "Celso":
-            st.info("💡 Lógica Celso activada: Se incluirá el ID de Operación para la Columna D.")
+        st.markdown("""
+        **Reglas de formateo:**
+        - Si destinatario = "Jessica", "Credibank" o **"Estancia la Ganadera SRL"**
+          → `"EMISOR",,,,,,,,MONTO`
+        - Si destinatario = Otro → `MONTO`
+        """)
     
-    st.header("📤 Cargar y Procesar")
-    
-    # 2. CARGA DE ARCHIVOS
+    st.header("📤 1. Cargar Comprobantes")
     archivos_subidos = st.file_uploader(
-        f"Sube los archivos de {cliente_global} (Imágenes, PDF, ZIP)",
+        "Selecciona uno o más archivos (imágenes, PDFs o ZIPs)",
         type=['jpg', 'jpeg', 'png', 'pdf', 'zip'],
         accept_multiple_files=True
     )
     
     if archivos_subidos:
-        # 3. BOTÓN PROCESAR
-        if st.button("🚀 Extraer y Generar Textos", type="primary", use_container_width=True):
+        if st.button("🚀 Procesar Comprobantes", type="primary", use_container_width=True):
             if not api_key:
                 st.error("⛔ No se puede procesar sin API Key.")
                 return
             
-            with st.spinner(f"Procesando lote para {cliente_global}..."):
+            if 'resultados_anteriores' in st.session_state:
+                del st.session_state.resultados_anteriores
+            
+            with st.spinner("Extrayendo archivos..."):
                 archivos_a_procesar = procesar_archivos_cargados(archivos_subidos)
             
             if not archivos_a_procesar:
-                st.error("❌ No se encontraron archivos válidos.")
+                st.error("❌ No se encontraron archivos válidos para procesar")
                 return
             
-            resultados_nexo = []
-            resultados_cliente = []
-            datos_auditoria = []
-            
+            resultados = []
+            datos_completos = []
             progress_bar = st.progress(0)
             status_text = st.empty()
             
             for idx, (nombre, contenido, tipo_mime) in enumerate(archivos_a_procesar):
                 progress = (idx + 1) / len(archivos_a_procesar)
                 progress_bar.progress(progress)
-                status_text.text(f"Analizando {idx + 1}/{len(archivos_a_procesar)}: {nombre}")
+                status_text.text(f"Procesando {idx + 1}/{len(archivos_a_procesar)}: {nombre}")
                 
+                # Extracción base original
                 datos_extraidos = extraer_datos_con_vision_api(contenido, nombre, tipo_mime)
+                linea_formateada, emisor, id_op = aplicar_logica_formateo(datos_extraidos)
                 
-                # Generar la doble partida en el momento
-                asientos = generar_asientos_por_cliente(datos_extraidos, cliente_global)
+                resultado = {
+                    "archivo": nombre,
+                    "linea": linea_formateada,
+                    "emisor": emisor,
+                    "id_operacion": id_op,
+                    "monto": limpiar_monto(datos_extraidos.get("monto", "")),
+                    "datos_raw": datos_extraidos
+                }
+                resultados.append(resultado)
+                datos_completos.append(datos_extraidos)
                 
-                if asientos.get("Nexo"): resultados_nexo.append(asientos["Nexo"])
-                if asientos.get("Cliente"): resultados_cliente.append(asientos["Cliente"])
-                
-                datos_extraidos["archivo"] = nombre
-                datos_auditoria.append(datos_extraidos)
-                
-                time.sleep(3) # Freno de mano API
+                # FRENO ANTI OVERLOAD
+                time.sleep(3)
             
             progress_bar.empty()
             status_text.empty()
             
-            # 4. MOSTRAR RESULTADOS DIRECTAMENTE
-            st.success("✅ ¡Procesamiento completado!")
+            st.session_state.resultados_anteriores = resultados
+
+    # MOSTRAR RESULTADOS (Mantiene tu visualización original + Paso 2)
+    if 'resultados_anteriores' in st.session_state:
+        resultados = st.session_state.resultados_anteriores
+        
+        st.header("📊 Resultados de Extracción")
+        tab1, tab2, tab3 = st.tabs(["📋 Formato Original", "🔍 Detalle", "📝 Datos Crudos"])
+        with tab1:
+            lineas_salida = [r["linea"] for r in resultados]
+            st.code("\n".join(lineas_salida), language=None)
+        with tab2:
+            for r in resultados:
+                # SE AGREGA EL ID EN EL DETALLE VISUAL
+                st.markdown(f"**Archivo:** {r['archivo']} | **Resultado:** `{r['linea']}` | **🆔 ID:** `{r.get('id_operacion', '')}`")
+        with tab3:
+            st.json(resultados)
+
+        st.markdown("---")
+        
+        # EL SELECTOR PARA DOBLE PARTIDA INTACTO
+        st.header("🎯 2. Asignar Cuentas para Doble Partida")
+        opciones = ["Seleccionar...", "Giardino", "Cta Cte", "Celso", "Canella", "Vertice", "Nexo Directo (Pega en Col C)", "Ignorar"]
+        
+        with st.form("form_doble_partida"):
+            st.markdown("Seleccioná de quién es cada comprobante para armar las contrapartidas automáticas.")
+            selecciones = []
+            for idx, res in enumerate(resultados):
+                colA, colB = st.columns([2, 1])
+                with colA:
+                    # SE AGREGA EL ID EN EL SELECTOR DE CADA COMPROBANTE
+                    st.write(f"📄 **{res['archivo']}** | 👤 {res['emisor']} | 🆔 **{res.get('id_operacion', 'N/A')}** | 💰 ${res['monto']}")
+                with colB:
+                    sel = st.selectbox("Asignar a:", opciones, key=f"sel_dp_{idx}", label_visibility="collapsed")
+                    selecciones.append(sel)
+                st.markdown("---")
             
-            tab_textos, tab_auditoria = st.tabs(["📋 Textos para Excel", "🔍 Auditoría de IDs y Datos"])
+            btn_generar = st.form_submit_button("⚡ Generar Textos de Contrapartidas", type="primary")
             
-            with tab_textos:
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.subheader("Para Hoja: NEXO")
-                    if resultados_nexo:
-                        st.code("\n".join(resultados_nexo), language=None)
-                    else:
-                        st.write("Sin datos para Nexo.")
+        if btn_generar:
+            bloques = {"Nexo": [], "Giardino": [], "Cta Cte": [], "Celso": [], "Canella": [], "Vertice": []}
+
+            for idx, res in enumerate(resultados):
+                cuenta = selecciones[idx]
+                if cuenta in ["Seleccionar...", "Ignorar"]: continue
                 
-                with col2:
-                    st.subheader(f"Para Hoja: {cliente_global.upper()}")
-                    if resultados_cliente:
-                        st.code("\n".join(resultados_cliente), language=None)
-                    else:
-                        st.write(f"Sin datos para {cliente_global}.")
-            
-            with tab_auditoria:
-                for d in datos_auditoria:
-                    st.markdown(f"**Archivo:** {d['archivo']} | **Emisor:** {d['emisor']} | **Monto:** {d['monto']} | 🆔 **ID:** `{d['id_operacion']}`")
+                asientos = generar_asientos_doble_partida(res["emisor"], res["monto"], res.get("id_operacion", ""), cuenta)
+                if "Nexo" in asientos: bloques["Nexo"].append(asientos["Nexo"])
+                if cuenta in bloques and cuenta in asientos: bloques[cuenta].append(asientos[cuenta])
+
+            st.success("✅ Asientos generados (Listos para pegar en Columna B)")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("Hoja: NEXO")
+                st.code("\n".join(bloques["Nexo"]) if bloques["Nexo"] else "Sin datos")
+            with c2:
+                st.subheader("Hojas: CLIENTES")
+                for cliente in ["Giardino", "Cta Cte", "Celso", "Canella", "Vertice"]:
+                    if bloques[cliente]:
+                        st.markdown(f"**{cliente}**")
+                        st.code("\n".join(bloques[cliente]))
 
 if __name__ == "__main__":
     main()
