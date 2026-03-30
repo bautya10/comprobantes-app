@@ -255,7 +255,11 @@ def extraer_archivos_zip(archivo_zip: bytes) -> List[Tuple[str, bytes, str]]:
     archivos = []
     try:
         with zipfile.ZipFile(io.BytesIO(archivo_zip), 'r') as zip_ref:
-            for file_info in zip_ref.filelist:
+            # ORDENAR alfabéticamente los archivos del ZIP antes de procesarlos
+            # Esto garantiza que 001_comprobante.jpg venga antes que 002_comprobante.jpg
+            filelist_ordenada = sorted(zip_ref.filelist, key=lambda x: x.filename)
+            
+            for file_info in filelist_ordenada:
                 if not file_info.is_dir():
                     nombre = file_info.filename
                     contenido = zip_ref.read(nombre)
